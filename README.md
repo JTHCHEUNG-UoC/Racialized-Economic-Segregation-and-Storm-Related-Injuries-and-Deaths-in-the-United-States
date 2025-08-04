@@ -1,7 +1,6 @@
 # Codes and data used for Cheung et al.
 
-This repository contains the data, code, and documentation for the study:
-“Structural Inequality and Storm-Related Injuries and Deaths in the United States: A County-Year Panel Analysis (2005–2022)”
+This repository contains the data, code, and documentation for the study: **“Racialized Economic Segregation and Storm-Related Injuries and Deaths in the United States, 2005–2022”**
 
 # Overview
 This project investigates the association between racialized economic segregation and storm-related injuries and fatalities across U.S. counties using a socioecological framework. We integrate storm event data with structural inequality metrics to assess how structural disadvantage shapes vulnerability to climate-driven extreme weather.
@@ -31,6 +30,4 @@ Use: Offset term in count models and calculation of rates.
 # Software & Reproducibility
 Language: R (version 4.5.0)
 
-Key packages: tidyverse, mgcv, pscl, sf, ggplot2, ggiraphExtra, glmmTMB
-
-All code is reproducible and documented with comments. Scripts are intended to be run sequentially.
+**All code is reproducible and documented with comments. Scripts are intended to be run sequentially.**
