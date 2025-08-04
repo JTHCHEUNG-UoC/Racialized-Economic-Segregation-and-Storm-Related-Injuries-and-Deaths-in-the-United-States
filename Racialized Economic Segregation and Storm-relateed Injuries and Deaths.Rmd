@@ -1,0 +1,545 @@
+---
+title: "Racialized Economic Segregation and Storm-Related Injuries and Deaths in the United States, 2005–2022"
+output: html_document
+---
+
+# Retrieve pathway
+```{r}
+library(rstudioapi)
+rstudioapi::getActiveDocumentContext
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+rm(list = ls())
+```
+
+# Set Seed For Reproducibility
+```{R}
+set.seed(1205)
+```
+
+# Load required packages
+```{R}
+library(dplyr)
+library(glmmTMB)
+library(stargazer)
+library(haven)
+library(tidycensus)
+library(splines)
+library(effects)
+library(ggeffects)
+library(lmtest)
+library(ggplot2)
+library(ggeffects)
+library(patchwork)
+library(flextable)
+library(officer)
+library(modelsummary)
+library(tigris)       
+library(sf)           
+library(viridis)      
+options(tigris_use_cache = TRUE)
+library(modeest)
+```
+
+# Set Census API Key
+```{R}
+API_KEY = "badf0eedd1bb7d8401e956db4175714e4f129980"
+
+census_api_key(API_KEY, install = TRUE, overwrite = TRUE)
+readRenviron("~/.Renviron")
+```
+
+# 1. Load and combine StormEvents data from 2005–2022
+```{R}
+file_list <- list.files(pattern = "^StormEvents_details-ftp_v1.0_d\\d{4}_c20250520\\.csv$", full.names = TRUE)
+all_data <- lapply(file_list, read.csv) %>% bind_rows()
+```
+
+# 2. Filter to years 2005–2022, and relevant event types
+```{R}
+all_data <- all_data %>% filter(YEAR >= 2005 & YEAR <= 2022)
+# Define relevant event types
+tropical_cyclone_events <- c(
+  "Hurricane (Typhoon)",
+  "Tropical Storm",
+  "Storm Surge/Tide",
+  "Coastal Flood",
+  "Flash Flood",
+  "High Wind",
+  "Tornado"
+)
+data <- all_data %>%
+  filter(EVENT_TYPE %in% tropical_cyclone_events) %>%
+  mutate(
+    county_fips = sprintf("%02d%03d", STATE_FIPS, CZ_FIPS),
+    year = as.integer(YEAR)
+  )
+```
+
+# 3. Assign ICE merge window to each storm event based on year
+```{r}
+data <- data %>%
+  mutate(
+    merge_window = case_when(
+      year == 2005 ~ "2005-2009",
+      year == 2006 ~ "2005-2009",
+      year == 2007 ~ "2006-2010",
+      year == 2008 ~ "2007-2011",
+      year == 2009 ~ "2008-2012",
+      year == 2010 ~ "2009-2013",
+      year == 2011 ~ "2010-2014",
+      year == 2012 ~ "2011-2015",
+      year == 2013 ~ "2012-2016",
+      year == 2014 ~ "2013-2017",
+      year == 2015 ~ "2014-2018",
+      year == 2016 ~ "2015-2019",
+      year == 2017 ~ "2016-2020",
+      year == 2018 ~ "2017-2021",
+      year == 2019 ~ "2018-2022",
+      year == 2020 ~ "2018-2022",
+      year == 2021 ~ "2018-2022",
+      year == 2022 ~ "2018-2022",
+      TRUE ~ NA_character_
+    )
+  )
+```
+
+# 4. Load ICE data
+```{R}
+ice <- read.csv("racism-county-income-inequity.csv")
+ice <- ice %>%
+  mutate(
+    county_fips = sprintf("%02d%03d", statefips, countyfips),
+    merge_window = year
+  )
+```
+
+# 5. Merge storm data with ICE data
+```{R}
+merged_df <- merge(data, ice, by = c("county_fips", "merge_window"))
+```
+
+# 6. Retrieve and merge ACS county-level population estimates
+# (If API retrieval fails, kindly turn off firewall and retry.)
+```{R}
+years <- c("2005-2009", "2006-2010", "2007-2011", "2008-2012", "2009-2013",
+           "2010-2014", "2011-2015", "2012-2016", "2013-2017", "2014-2018",
+           "2015-2019", "2016-2020", "2017-2021", "2018-2022")
+end_years <- as.integer(substr(years, 6, 9))
+
+pop_data <- purrr::map2_dfr(years, end_years, ~{
+  get_acs(geography = "county",
+          variables = "B01003_001",
+          year = .y,
+          survey = "acs5",
+          output = "wide") %>%
+    mutate(merge_window = .x)
+})
+
+pop_data <- pop_data %>%
+  mutate(county_fips = GEOID,
+         county_population = B01003_001E) %>%
+  select(county_fips, merge_window, county_population)
+
+merged_df <- merged_df %>%
+  left_join(pop_data, by = c("county_fips", "merge_window"))
+```
+
+# 7. Create ICE quintile variable
+```{R}
+merged_df <- merged_df %>%
+  mutate(ice_quintile = ntile(ice_wanh_ba, 5))
+``` 
+
+# 8. Descriptive Statistics by ICE Quintile
+```{R}
+# Create clean summary table
+summary_table <- merged_df %>%
+  filter(!is.na(ice_quintile)) %>% 
+  group_by(ice_quintile) %>%
+  summarise(
+    Counties = n_distinct(county_fips),
+    `Storm Events` = n_distinct(EPISODE_ID),
+    `Direct Injuries (per 100,000 people)` = mean((INJURIES_DIRECT / county_population) * 1e5, na.rm = TRUE),
+    `Direct Deaths (per 100,000 people)` = mean((DEATHS_DIRECT / county_population) * 1e5, na.rm = TRUE),
+    `Indirect Injuries (per 100,000 people)` = mean((INJURIES_INDIRECT / county_population) * 1e5, na.rm = TRUE),
+    `Indirect Deaths (per 100,000 people)` = mean((DEATHS_INDIRECT / county_population) * 1e5, na.rm = TRUE)
+  ) %>%
+mutate(across(where(is.numeric), round, digits = 2))
+
+# Create and format flextable
+summary_flex <- flextable(summary_table) %>%
+  autofit() %>%
+  set_table_properties(layout = "autofit", width = 0.95)
+
+# Export to Word
+doc2 <- read_docx()
+doc2 <- body_add_par(doc2, "Storm-Related Health Outcomes by ICE Quintile, 2005–2022 (per 100,000 Population)", style = "heading 1")
+doc2 <- body_add_flextable(doc2, summary_flex)
+print(doc2, target = "ICE_Descriptive_Stats_Per100k.docx")
+```
+
+################################################################################ 
+
+# 8. Run models
+```{R}
+# Fit models for Direct Injuries
+model_di_linear <- glmmTMB(
+  INJURIES_DIRECT ~ ice_quintile + log(county_population) + (1 | county_fips),
+  ziformula = ~ ice_quintile,
+  family = nbinom2,
+  data = merged_df
+)
+model_di_spline <- glmmTMB(
+  INJURIES_DIRECT ~ ns(ice_wanh_ba, df = 3) + log(county_population) + (1 | county_fips),
+  ziformula = ~ ns(ice_wanh_ba, df = 3),
+  family = nbinom2,
+  data = merged_df
+)
+
+# Fit models for Direct Deaths
+model_dd_linear <- glmmTMB(
+  DEATHS_DIRECT ~ ice_quintile + log(county_population) + (1 | county_fips),
+  ziformula = ~ ice_quintile,
+  family = nbinom2,
+  data = merged_df
+)
+model_dd_spline <- glmmTMB(
+  DEATHS_DIRECT ~ ns(ice_wanh_ba, df = 3) + log(county_population) + (1 | county_fips),
+  ziformula = ~ ns(ice_wanh_ba, df = 3),
+  family = nbinom2,
+  data = merged_df
+)
+
+# Fit models for Indirect Injuries
+model_ii_linear <- glmmTMB(
+  INJURIES_INDIRECT ~ ice_quintile + log(county_population) + (1 | county_fips),
+  ziformula = ~ ice_quintile,
+  family = nbinom2,
+  data = merged_df
+)
+model_ii_spline <- glmmTMB(
+  INJURIES_INDIRECT ~ ns(ice_wanh_ba, df = 3) + log(county_population) + (1 | county_fips),
+  ziformula = ~ ns(ice_wanh_ba, df = 3),
+  family = nbinom2,
+  data = merged_df
+)
+
+# Fit models for Indirect Deaths
+model_id_linear <- glmmTMB(
+  DEATHS_INDIRECT ~ ice_quintile + log(county_population) + (1 | county_fips),
+  ziformula = ~ ice_quintile,
+  family = nbinom2,
+  data = merged_df
+)
+model_id_spline <- glmmTMB(
+  DEATHS_INDIRECT ~ ns(ice_wanh_ba, df = 3) + log(county_population) + (1 | county_fips),
+  ziformula = ~ ns(ice_wanh_ba, df = 3),
+  family = nbinom2,
+  data = merged_df
+)
+
+# Compare AICs
+AIC(model_di_linear, model_di_spline)
+AIC(model_dd_linear, model_dd_spline)
+AIC(model_ii_linear, model_ii_spline)
+AIC(model_id_linear, model_id_spline)
+
+# Likelihood ratio tests
+
+# Run LR tests and store results
+lrt_di <- lrtest(model_di_linear, model_di_spline)
+lrt_dd <- lrtest(model_dd_linear, model_dd_spline)
+lrt_ii <- lrtest(model_ii_linear, model_ii_spline)
+lrt_id <- lrtest(model_id_linear, model_id_spline)
+
+# Create a data frame summarizing LRT comparisons
+lrt_table <- data.frame(
+  Outcome = c("Direct Injuries", "Direct Deaths", "Indirect Injuries", "Indirect Deaths"),
+  Comparison = c("Linear vs. Spline", "Linear vs. Spline", "Linear vs. Spline", "Linear vs. Spline"),
+  DF = c(lrt_di[2, "Df"], lrt_dd[2, "Df"], lrt_ii[2, "Df"], lrt_id[2, "Df"]),
+  Chisq = round(c(lrt_di[2, "Chisq"], lrt_dd[2, "Chisq"], lrt_ii[2, "Chisq"], lrt_id[2, "Chisq"]), 2),
+  p_value = format.pval(
+    c(lrt_di[2, "Pr(>Chisq)"], lrt_dd[2, "Pr(>Chisq)"], lrt_ii[2, "Pr(>Chisq)"], lrt_id[2, "Pr(>Chisq)"]),
+    eps = 0.001, digits = 3, scientific = FALSE
+  )
+)
+
+# View the table
+print(lrt_table)
+
+lrt_table
+
+```
+
+# 9. Summarize results for linear models
+```{R}
+# Create flextable summary with 2 decimal places
+reg_table <- modelsummary(
+  list(
+    "Injuries (Direct)"   = model_di_linear,
+    "Deaths (Direct)"     = model_dd_linear,
+    "Injuries (Indirect)" = model_ii_linear,
+    "Deaths (Indirect)"   = model_id_linear
+  ),
+  component = "cond",                # Show conditional (count) model only
+  exponentiate = TRUE,              # Show exp(coef)
+  statistic = "conf.int",           # Show 95% CI
+  coef_map = c(
+    "ice_quintile"           = "ICE Quintile",
+    "log(county_population)" = "Log(Population)"
+  ),
+  stars = TRUE,
+  fmt = 2,                          # Round to 2 decimal places
+  output = "flextable"
+)
+
+# Create and save Word document
+doc <- read_docx()
+doc <- body_add_par(doc, "Storm-Related Outcomes by ICE Quintile", style = "heading 1")
+doc <- body_add_flextable(doc, reg_table)
+print(doc, target = "ICE_Models_Output.docx")
+```
+
+# 10. Generate Predictions for Visualization (Panel Plots)
+
+```{R}
+# === Generate predicted IRRs (rescale to ICE = 0 reference) ===
+
+# Direct Injuries
+pred_di <- ggpredict(model_di_spline, terms = "ice_wanh_ba [all]", type = "count") %>%
+  as.data.frame()
+ref_di <- pred_di$predicted[pred_di$x == 0]
+pred_di$IRR <- pred_di$predicted / ref_di
+pred_di$IRR_low <- pred_di$conf.low / ref_di
+pred_di$IRR_high <- pred_di$conf.high / ref_di
+pred_di$outcome <- "Direct Injuries"
+
+# Direct Deaths
+pred_dd <- ggpredict(model_dd_spline, terms = "ice_wanh_ba [all]", type = "count") %>%
+  as.data.frame()
+ref_dd <- pred_dd$predicted[pred_dd$x == 0]
+pred_dd$IRR <- pred_dd$predicted / ref_dd
+pred_dd$IRR_low <- pred_dd$conf.low / ref_dd
+pred_dd$IRR_high <- pred_dd$conf.high / ref_dd
+pred_dd$outcome <- "Direct Deaths"
+
+# Combine datasets
+pred_combined <- rbind(pred_di, pred_dd)
+
+# === Create panel plot ===
+
+panel_plot <- ggplot(pred_combined, aes(x = x, y = IRR)) +
+  geom_line(size = 1.2, color = "black") +
+  geom_ribbon(aes(ymin = IRR_low, ymax = IRR_high), alpha = 0.2, fill = "gray40") +
+facet_wrap(~outcome, nrow = 1) +  # Same y-axis across panels
+  labs(
+    x = "ICE (Racialized Income Segregation)",
+    y = "Incidence Rate Ratio (IRR)",
+    caption = "Reference value: ICE = 0"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    strip.text = element_text(face = "bold", size = 14),
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    axis.title = element_text(size = 13),
+    axis.text = element_text(size = 12)
+  )
+panel_plot
+
+ggsave(
+  filename = "panel_plot.tiff",      # Or .png, .pdf, .eps
+  plot = panel_plot,                # Your ggplot object
+  width = 10, height = 5,           # Dimensions in inches (adjust as needed)
+  dpi = 600,                        # High-resolution (300–600 dpi is standard for print)
+  units = "in",                     # Specify inches
+  compression = "lzw"               # Recommended for TIFF files
+)
+```
+
+
+## JUSTIFICATION OF WIDE CIs among NEGATIVE ICE-SCORE COUNTIES
+```{R}
+# Create histogram consistent with panel figure style
+hist_plot <- ggplot(merged_df, aes(x = ice_wanh_ba)) +
+  geom_histogram(
+    binwidth = 0.05,
+    color = "black",
+    fill = "gray60",
+    boundary = 0
+  ) +
+  labs(
+    x = "ICE Score (Racialized Income Segregation)",
+    y = "Number of County-Years"
+    # title = "Distribution of ICE Scores Across U.S. Counties (2005–2022)"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(color = "black")
+  )
+
+# Save as high-resolution JPEG
+ggsave("ice_score_histogram.jpg", plot = hist_plot, dpi = 600, width = 8, height = 5, units = "in")
+
+```
+
+# 11. MAPPING county-level ICE quintiles and the frequency of storm-related events (2005–2022) (MODE version)
+
+```{r}
+# Summarize total events per county and assign ICE quintile
+county_summary <- merged_df %>%
+  group_by(county_fips) %>%
+  summarise(
+    total_events = n(),
+    ice_quintile = first(ice_quintile)  # Assuming ICE quintile is stable across years
+  )
+#### Check if ICE quintiles change over time
+ice_check <- merged_df %>%
+  group_by(county_fips) %>%
+  summarise(
+    n_years = n_distinct(YEAR),  # Correct: count unique years
+    n_unique_quintiles = n_distinct(ice_quintile),
+    quintiles = paste(sort(unique(ice_quintile)), collapse = ", ")
+  ) %>%
+  arrange(desc(n_unique_quintiles))
+
+# Mode (most frequent) ICE quintile per county
+ice_mode <- merged_df %>%
+  group_by(county_fips) %>%
+  summarise(ice_quintile = as.integer(names(which.max(table(ice_quintile)))))
+
+
+# Load counties shapefile from tigris
+us_counties <- counties(cb = TRUE, resolution = "5m", year = 2020) %>%
+  st_transform(crs = 4326) %>%
+  mutate(county_fips = GEOID)
+
+# Merge
+map_data <- us_counties %>%
+  left_join(county_summary, by = "county_fips")
+
+
+# Filter out non-CONUS states (using STATEFP codes)
+conus_states <- c(
+  sprintf("%02d", c(1:56))  # All state FIPS codes
+)
+exclude_states <- c("02", "15", "60", "66", "69", "72", "78")  # Alaska, Hawaii, and territories
+map_data_conus <- map_data %>%
+  filter(!(STATEFP %in% exclude_states))
+
+# ICE Quintile Map (CONUS only)
+ice_map <- ggplot(map_data_conus) +
+  geom_sf(aes(fill = as.factor(ice_quintile)), color = NA) +
+  scale_fill_viridis_d(
+    name = "ICE Quintile\n(Mode 2005–2022)",
+    na.value = "lightgray"
+  ) +
+  labs(title = "County-Level ICE Quintiles") +
+  theme_void() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+# Save map
+ggsave("ICE_quintile_mode_map.png", ice_map, width = 10, height = 6, dpi = 300)
+
+
+# Events Map (CONUS Only)
+events_map <- ggplot(map_data_conus) +
+  geom_sf(aes(fill = total_events), color = NA) +
+  scale_fill_viridis_c(
+    name = "Storm Events\n(2005–2022)",
+    na.value = "lightgray",
+    option = "magma",
+    trans = "log10",
+    direction = -1  # Reverses color scale: darker = more events
+  ) +
+  labs(title = "Total Storm-Related Events per County (2005–2022)") +
+  theme_void() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+# Save high-res image
+ggsave("storm_event_map_conus.png", events_map, width = 10, height = 6, dpi = 300)
+
+```
+
+# 12. MAPPING county-level ICE quintiles and the frequency of storm-related events (2005–2022) (Mid-point version)
+
+```{R}
+# midpoint year
+mid_year <- 2013
+
+# Filter merged_df to only use ICE from midpoint year
+ice_midyear <- merged_df %>%
+  filter(YEAR == mid_year) %>%
+  select(county_fips, ice_quintile_mid = ice_quintile)
+
+# Compute total storm events per county over the full period
+county_summary <- merged_df %>%
+  group_by(county_fips) %>%
+  summarise(total_events = n())
+
+# Merge total events with mid-year ICE quintile
+county_summary <- county_summary %>%
+  left_join(ice_midyear, by = "county_fips")
+
+# Load and process U.S. counties shapefile
+us_counties <- counties(cb = TRUE, resolution = "5m", year = 2020) %>%
+  st_transform(crs = 4326) %>%
+  mutate(county_fips = GEOID)
+
+# Merge shapefile with county-level summary data
+map_data <- us_counties %>%
+  left_join(county_summary, by = "county_fips")
+
+# Filter out Alaska, Hawaii, territories for CONUS map
+exclude_states <- c("02", "15", "60", "66", "69", "72", "78")
+map_data_conus <- map_data %>%
+  filter(!(STATEFP %in% exclude_states))
+
+# Plot ICE Quintile Map (Midpoint year)
+ice_map <- ggplot(map_data_conus) +
+  geom_sf(aes(fill = as.factor(ice_quintile_mid)), color = NA) +
+  scale_fill_viridis_d(
+    name = "ICE Quintile\n(Midpoint Year)",
+    na.value = "lightgray"
+  ) +
+  labs(title = "County-Level ICE Quintiles (2013)") +
+  theme_void() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+ggsave("ICE_quintile_2013_map.png", ice_map, width = 10, height = 6, dpi = 300)
+
+# Plot Storm Events Map
+events_map <- ggplot(map_data_conus) +
+  geom_sf(aes(fill = total_events), color = NA) +
+  scale_fill_viridis_c(
+    name = "Storm Events\n(2005–2022)",
+    na.value = "lightgray",
+    option = "magma",
+    trans = "log10",
+    direction = -1
+  ) +
+  labs(title = "Total Storm-Related Events per County (2005–2022)") +
+  theme_void() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+ggsave("storm_event_map_conus.png", events_map, width = 10, height = 6, dpi = 300)
+```
+
+# END
