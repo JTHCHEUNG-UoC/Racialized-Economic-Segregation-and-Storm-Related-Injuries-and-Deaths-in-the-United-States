@@ -30,6 +30,6 @@ Use: Offset term in count models and calculation of rates.
 # Software & Reproducibility
 Language: R (version 4.5.0)
 
-**All code is reproducible and documented with comments. Scripts are intended to be run sequentially.**
+All code is reproducible and documented with comments. Scripts are intended to be run sequentially.
 
-Please contact Jason Cheung (jasoncheung@uchicago.edu) with any questions about this code.
+**Please contact Jason Cheung (jasoncheung@uchicago.edu) with any questions about this code.**
