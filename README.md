@@ -1,4 +1,4 @@
-# Codes and data used for Cheung et al. (submitted to Nature Communications).
+# Codes and data used for Cheung et al.
 
 This repository contains the data, code, and documentation for the study:
 # “Structural Inequality and Storm-Related Injuries and Deaths in the United States: A County-Year Panel Analysis (2005–2022)”
