@@ -7,7 +7,7 @@ This project investigates the association between racialized economic segregatio
 
 # Data Sources
 ## 1. Storm Events Data (2005–2022)
-Source: NOAA Storm Events Database
+Source: National Oceanic and Atmospheric Administration (NOAA) Storm Events Database
 
 Event Types Included: Hurricanes (Typhoons), Tropical Storms, Storm Surge/Tide, Coastal Floods, Flash Floods, High Winds, and Tornadoes.
 
