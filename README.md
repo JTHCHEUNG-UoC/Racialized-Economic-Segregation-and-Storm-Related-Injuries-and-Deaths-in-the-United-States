@@ -1,7 +1,7 @@
 # Codes and data used for Cheung et al.
 
 This repository contains the data, code, and documentation for the study:
-# “Structural Inequality and Storm-Related Injuries and Deaths in the United States: A County-Year Panel Analysis (2005–2022)”
+“Structural Inequality and Storm-Related Injuries and Deaths in the United States: A County-Year Panel Analysis (2005–2022)”
 
 # Overview
 This project investigates the association between racialized economic segregation and storm-related injuries and fatalities across U.S. counties using a socioecological framework. We integrate storm event data with structural inequality metrics to assess how structural disadvantage shapes vulnerability to climate-driven extreme weather.
