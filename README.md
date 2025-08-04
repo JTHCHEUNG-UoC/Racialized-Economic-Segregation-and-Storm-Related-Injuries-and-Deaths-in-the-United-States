@@ -1,4 +1,4 @@
-# Codes and data used for Cheung et al.
+# Code and data used for Cheung et al.
 
 This repository contains the data, code, and documentation for the study: **“Racialized Economic Segregation and Storm-Related Injuries and Deaths in the United States, 2005–2022”**
 
